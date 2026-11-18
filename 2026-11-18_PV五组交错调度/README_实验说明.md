@@ -1,5 +1,7 @@
 # C：五组交错调度
 
+> NM37 CSim/CSynth 已完成；有周期收益但慢于 B 且面积更大，详见 [验证报告](./验证报告.md)。
+
 - 日期：2026-11-18。
 - 唯一来源：`diego3893/FSA_HLS` 的 `4a6fe4762f139075c4208d7729f2acf8e7957822`。
 - 本候选只修改 `src/stream/split_d/split_d_controller.cpp`；`include/`、其余 `src/`、`tests/`、`hls/fsa_stream_split_d/run_hls.tcl` 和 `run_hls.sh` 均来自同一提交。
@@ -28,7 +30,7 @@ bash ./validate_candidate.sh
 
 先检查 CSim 数学结果与异常输入、CSynth 退出码，再记录两个 worker 的 PV 循环 latency/II、顶层资源与估算时钟、RTL 中 `runPeArray` 实例数。达到原 baseline 的周期门槛要求 PV 内部循环 <10,886；同时要求 LUT <1,213,113、器件/时钟/接口/256PE 合同不变。HLS 达标后再考虑 CoSim 和物理实现；本地 C++ 测试不能替代它们。
 
-本候选尚未在 NM37 运行官方 Vitis 验收。三个候选互相独立，不要叠加源码或复用彼此的构建目录。
+本候选已在 NM37 运行官方 Vitis CSim/CSynth，结果见同目录验证报告。三个候选互相独立，不要叠加源码或复用彼此的构建目录。
 
 ## 当前本地结果
 

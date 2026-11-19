@@ -351,22 +351,17 @@ namespace detail{
                 running_sum[col] = acc_result[col];
             }
 
-            // PV每组保留8个独立feature上下文。沿row+context方向
-            // 发射wave，让不同行在同一次PE调用中处理不同feature；
-            // 每个上下文仍按row=0..D-1顺序累加。
-            constexpr int pv_wave_operations =
-                PE_DIM+detail::PV_INTERLEAVE-1;
+            // PV每组保留8个独立feature上下文。按key row顺序计算，
+            // 每个row依次处理各个context，再更新output_acc。
+            constexpr int pv_pe_operations =
+                PE_DIM*detail::PV_INTERLEAVE;
             constexpr int pv_group_operations =
-                pv_wave_operations+detail::PV_INTERLEAVE;
+                pv_pe_operations+detail::PV_INTERLEAVE;
             constexpr int pv_groups =
                 (HEAD_DIM+detail::PV_INTERLEAVE-1)/
                 detail::PV_INTERLEAVE;
             acc_t pv_sum[detail::PV_INTERLEAVE][QUERY_BLOCK_COLS]{};
             #pragma HLS ARRAY_PARTITION variable=pv_sum complete dim=0
-            // 部分和按当前PE行存放，下一wave移到后一行；只有末行结果
-            // 按context保存，供原有output_acc更新阶段使用。
-            acc_t pv_row_sum[PE_DIM][QUERY_BLOCK_COLS]{};
-            #pragma HLS ARRAY_PARTITION variable=pv_row_sum complete dim=0
             int pv_group = 0;
             int pv_group_operation = 0;
 
@@ -375,7 +370,7 @@ namespace detail{
                     ++operation){
                 #pragma HLS PIPELINE II=1
                 #pragma HLS DEPENDENCE variable=output_acc inter false
-                #pragma HLS DEPENDENCE variable=pv_row_sum inter RAW distance=1 true
+                #pragma HLS DEPENDENCE variable=pv_sum inter RAW distance=8 true
                 const int feature_base =
                     pv_group*detail::PV_INTERLEAVE;
                 const int remaining_features = HEAD_DIM-feature_base;
@@ -383,44 +378,36 @@ namespace detail{
                     remaining_features<detail::PV_INTERLEAVE
                         ? remaining_features : detail::PV_INTERLEAVE;
 
-                if(pv_group_operation<pv_wave_operations){
-                    const int wave = pv_group_operation;
-                    detail::clearOperands(operand_b, operand_c);
-                    for(int row=0; row<PE_DIM; ++row){
-                        #pragma HLS UNROLL
-                        const int context = wave-row;
-                        if(context>=0 && context<active_contexts){
-                            const int feature = feature_base+context;
+                if(pv_group_operation<pv_pe_operations){
+                    const int row =
+                        pv_group_operation/detail::PV_INTERLEAVE;
+                    const int context =
+                        pv_group_operation%detail::PV_INTERLEAVE;
+                    if(context<active_contexts){
+                        const int feature = feature_base+context;
+                        detail::clearOperands(operand_b, operand_c);
+                        for(int r=0; r<PE_DIM; ++r){
+                            #pragma HLS UNROLL
                             for(int col=0; col<QUERY_BLOCK_COLS; ++col){
                                 #pragma HLS UNROLL
-                                operand_b[row][col] = v_tile[row][feature];
-                                operand_c[row][col] = row==0
-                                    ? accZero() : pv_row_sum[row][col];
+                                operand_b[r][col] = r==row
+                                    ? v_tile[r][feature] : elemZero();
+                                operand_c[r][col] = r==row
+                                    ? pv_sum[context][col] : accZero();
                             }
                         }
-                    }
-                    detail::runPeArray(
-                        pe, operand_b, operand_c, false, pe_result
-                    );
-                    for(int row=0; row<PE_DIM; ++row){
-                        #pragma HLS UNROLL
-                        const int context = wave-row;
-                        if(context>=0 && context<active_contexts){
-                            for(int col=0; col<QUERY_BLOCK_COLS; ++col){
-                                #pragma HLS UNROLL
-                                if(row+1<PE_DIM){
-                                    pv_row_sum[row+1][col] =
-                                        pe_result[row][col].out_accType;
-                                }else{
-                                    pv_sum[context][col] =
-                                        pe_result[row][col].out_accType;
-                                }
-                            }
+                        detail::runPeArray(
+                            pe, operand_b, operand_c, false, pe_result
+                        );
+                        for(int col=0; col<QUERY_BLOCK_COLS; ++col){
+                            #pragma HLS UNROLL
+                            pv_sum[context][col] =
+                                pe_result[row][col].out_accType;
                         }
                     }
                 }else{
                     const int context =
-                        pv_group_operation-pv_wave_operations;
+                        pv_group_operation-pv_pe_operations;
                     if(context<active_contexts){
                         const int feature = feature_base+context;
                         for(int col=0; col<QUERY_BLOCK_COLS; ++col){
